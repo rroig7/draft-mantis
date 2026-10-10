@@ -1,0 +1,42 @@
+{
+  "manifest_version": 3,
+  "name": "Draft Mantis Bridge",
+  "version": "1.0.0",
+  "description": "Read-only: streams picks from your ESPN fantasy draft room to the Draft Mantis board running on your computer. Never makes picks or sends anything to ESPN.",
+  "icons": { "48": "icons/mantis.svg", "96": "icons/mantis.svg" },
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "draft-mantis-bridge@draft-mantis.local",
+      "strict_min_version": "128.0",
+      "data_collection_permissions": { "required": ["none"] }
+    }
+  },
+  "permissions": ["storage"],
+  "host_permissions": [
+    "https://fantasy.espn.com/*",
+    "https://fantasydraft.espn.com/*",
+    "http://localhost/*",
+    "http://127.0.0.1/*"
+  ],
+  "background": { "scripts": ["background.js"] },
+  "content_scripts": [
+    {
+      "matches": ["https://fantasy.espn.com/*draft*", "https://fantasydraft.espn.com/*"],
+      "js": ["tap.js"],
+      "run_at": "document_start",
+      "all_frames": true,
+      "world": "MAIN"
+    },
+    {
+      "matches": ["https://fantasy.espn.com/*draft*", "https://fantasydraft.espn.com/*"],
+      "js": ["relay.js"],
+      "run_at": "document_start",
+      "all_frames": true
+    }
+  ],
+  "action": {
+    "default_title": "Draft Mantis Bridge",
+    "default_popup": "popup.html",
+    "default_icon": "icons/mantis.svg"
+  }
+}

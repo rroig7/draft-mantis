@@ -1,0 +1,17 @@
+# Generated data: player pulls, your league's rosters/moves/odds, logs. Rebuild with `python3 -m mantis build`.
+data/
+dist/
+
+# Python
+__pycache__/
+*.pyc
+
+# Firefox add-on packaging
+firefox-addon/web-ext-artifacts/
+*.xpi
+
+# OS / editor
+.DS_Store
+
+# Personal Claude Code settings
+.claude/settings.local.json

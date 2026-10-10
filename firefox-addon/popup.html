@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Draft Mantis Bridge</title>
+<link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <header>
+    <img src="icons/mantis.svg" alt="" width="28" height="28">
+    <div><h1>Draft <span>Mantis</span> Bridge</h1><p class="tag">Read-only &middot; never makes picks</p></div>
+  </header>
+
+  <section class="row" id="permRow" hidden>
+    <div><b>Allow access</b><p>Firefox needs your OK to read the ESPN draft room and talk to Draft Mantis on this computer.</p></div>
+    <button type="button" id="grant">Allow</button>
+  </section>
+
+  <section class="row"><span class="dot" id="srvDot"></span>
+    <div><b id="srvHead">Draft Mantis board</b><p id="srvSub">Checking…</p></div>
+  </section>
+
+  <section class="row"><span class="dot" id="roomDot"></span>
+    <div><b id="roomHead">ESPN draft room</b><p id="roomSub">Open your draft room (or an ESPN mock draft) in this browser.</p></div>
+  </section>
+
+  <section class="stats" id="stats" hidden>
+    <div><span class="lbl">Picks seen</span><b id="sPicks">0</b></div>
+    <div><span class="lbl">Feed lines</span><b id="sLines">0</b></div>
+    <div><span class="lbl">Last sent</span><b id="sSent">&ndash;</b></div>
+  </section>
+
+  <p class="warn" id="warn" hidden></p>
+
+  <footer>
+    <label for="port">Port</label>
+    <input id="port" type="number" min="1024" max="65535" value="8765">
+    <a id="openBoard" href="http://localhost:8765/" target="_blank" rel="noopener">Open board</a>
+  </footer>
+  <script src="popup.js"></script>
+</body>
+</html>
