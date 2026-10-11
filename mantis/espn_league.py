@@ -19,7 +19,7 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-from . import config
+from . import config, net
 
 LEAGUE_URL = "https://lm-api-reads.fantasy.espn.com/apis/v3/games/fba/seasons/{season}/segments/0/leagues/{league_id}"
 FAN_URL = "https://fan.api.espn.com/apis/v2/fans/{swid}"
@@ -52,7 +52,7 @@ def load_store() -> dict:
     data = {}
     if STORE.exists():
         try:
-            data = json.loads(STORE.read_text())
+            data = json.loads(STORE.read_text(encoding="utf-8"))
         except json.JSONDecodeError:
             data = {}
     if os.environ.get("ESPN_SWID"):
@@ -65,7 +65,7 @@ def load_store() -> dict:
 def save_store(data: dict) -> None:
     STORE.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     tmp = STORE.with_suffix(".tmp")
-    tmp.write_text(json.dumps(data, indent=2))
+    tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
     os.chmod(tmp, 0o600)
     tmp.replace(STORE)
 
@@ -94,7 +94,7 @@ def _migrate_legacy(root: Path, sel: dict) -> None:
     owner = {"id": sel["id"], "season": sel["season"]}
     if (legacy / "season.json").exists():
         try:
-            rep = json.loads((legacy / "season.json").read_text())
+            rep = json.loads((legacy / "season.json").read_text(encoding="utf-8"))
             if rep.get("leagueId"):
                 owner = {"id": rep["leagueId"], "season": rep.get("leagueSeason") or sel["season"]}
         except json.JSONDecodeError:
@@ -141,7 +141,7 @@ def _get_json(url: str, cookies: dict | None = None, timeout: int = 20, fresh: b
         headers["Cookie"] = f"SWID={cookies['swid']}; espn_s2={cookies['espn_s2']}"
     req = urllib.request.Request(url, headers=headers)
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with net.urlopen(req, timeout=timeout) as resp:
             return json.loads(resp.read())
     except urllib.error.HTTPError as e:
         raise EspnError(f"HTTP {e.code}", e.code) from None

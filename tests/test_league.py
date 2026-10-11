@@ -23,7 +23,7 @@ SWID = "{AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE}"
 
 def fake_league(points: bool = False) -> dict:
     """Shape of lm-api-reads .../leagues/{id}?view=mSettings&view=mTeam&view=mRoster&view=mDraftDetail."""
-    ids = [p["id"] for p in json.loads((ROOT / "data" / "players.json").read_text())["players"][:12]]
+    ids = [p["id"] for p in json.loads((ROOT / "data" / "players.json").read_text(encoding="utf-8"))["players"][:12]]
     if points:
         items = [{"statId": 0, "points": 1}, {"statId": 6, "points": 1.2}, {"statId": 3, "points": 1.5},
                  {"statId": 2, "points": 3}, {"statId": 1, "points": 3}, {"statId": 11, "points": -1},

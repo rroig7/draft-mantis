@@ -17,14 +17,14 @@ import urllib.request
 from html.parser import HTMLParser
 from pathlib import Path
 
-from . import config
+from . import config, net
 
 UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
 
 
 def _get(url: str, headers: dict | None = None, timeout: int = 60) -> bytes:
     req = urllib.request.Request(url, headers={"User-Agent": UA, **(headers or {})})
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
+    with net.urlopen(req, timeout=timeout) as resp:
         return resp.read()
 
 

@@ -15,8 +15,8 @@ os.environ.setdefault("MANTIS_HOME", tempfile.mkdtemp())
 from mantis import espn_league, season  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
-PAYLOAD = json.loads((ROOT / "data" / "players.json").read_text())
-PRO_DAYS = json.loads((ROOT / "data" / "raw" / "espn_proschedule.json").read_text())
+PAYLOAD = json.loads((ROOT / "data" / "players.json").read_text(encoding="utf-8"))
+PRO_DAYS = json.loads((ROOT / "data" / "raw" / "espn_proschedule.json").read_text(encoding="utf-8"))
 
 
 def pro_days():

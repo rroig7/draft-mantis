@@ -14,6 +14,8 @@ python3 -m mantis top --pos C -n 20
 open dist/draft-mantis.html          # interactive draft board
 ```
 
+**`CERTIFICATE_VERIFY_FAILED` errors?** Your Python can't find its CA certificates (common with python.org installs on macOS). Mantis retries with `certifi` and the system bundle, and if none of them verify it falls back to an unverified connection and prints a warning. The proper fix is to run `/Applications/Python 3.x/Install Certificates.command` (or `pip install certifi`). Set `MANTIS_SSL=strict` to refuse unverified connections, or `MANTIS_SSL=off` to skip checks from the start.
+
 Outputs:
 
 | File | What |

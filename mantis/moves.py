@@ -57,7 +57,7 @@ def normalize(tx: dict) -> dict | None:
 def sync(ldir: Path, raw_tx: list[dict]) -> list[dict]:
     """Merge newly seen transactions into the league's transactions.json and return all known moves, newest first."""
     path = ldir / "transactions.json"
-    known = json.loads(path.read_text()) if path.exists() else {}
+    known = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
     for tx in raw_tx:
         n = normalize(tx)
         if n:
@@ -67,7 +67,7 @@ def sync(ldir: Path, raw_tx: list[dict]) -> list[dict]:
     for m in known.values():
         if m["status"] == "PENDING" and m["id"] not in live_ids and m.get("process") and m["process"] < time.time() * 1000 - 3600e3:
             m["status"] = "UNKNOWN"
-    path.write_text(json.dumps(known))
+    path.write_text(json.dumps(known), encoding="utf-8")
     return sorted(known.values(), key=lambda m: -(m.get("proposed") or 0))
 
 
@@ -85,7 +85,7 @@ def record_plan(ldir: Path, rep: dict) -> None:
     if not sug:
         return
     path = ldir / "plan.json"
-    plan = json.loads(path.read_text()) if path.exists() else {}
+    plan = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
     now = rep["generated"]
     new = [{"kind": "waiver", "add": w["add"], "drop": w["drop"], "dMe": w["dMe"]} for w in sug["waivers"][:5]]
     new += [{"kind": "trade", "partner": t["partner"], "give": t["give"], "get": t["get"], "dMe": t["dMe"], "dThem": t["dThem"]}
@@ -96,7 +96,7 @@ def record_plan(ldir: Path, rep: dict) -> None:
                    "dMeFirst": plan.get(k, {}).get("dMeFirst", s["dMe"])}
     cutoff = (dt.datetime.now() - dt.timedelta(days=21)).strftime("%Y-%m-%d")
     plan = {k: v for k, v in plan.items() if v["lastSeen"] >= cutoff}
-    path.write_text(json.dumps(plan))
+    path.write_text(json.dumps(plan), encoding="utf-8")
 
 
 def transfers_of(s: dict, me: int) -> list[tuple[int, int, int]]:
@@ -172,7 +172,7 @@ class Context:
         espn_league.require_rosters(self.snap)
         self.ldir = espn_league.league_dir(root, sel)
         self.key = espn_league.league_key(sel)
-        self.payload = json.loads((root / "data" / "players.json").read_text())
+        self.payload = json.loads((root / "data" / "players.json").read_text(encoding="utf-8"))
         self.pro = sources.espn_pro_schedule(root / "data" / "raw")
         self.me = self.snap.get("myTeamId")
         self.rosters = {t["id"]: list(t["roster"]) for t in self.snap["teams"]}
@@ -218,7 +218,7 @@ def build(root: Path, whatif: list[dict] | None = None) -> dict:
     with_pending = apply(now, [x for m in reversed(pending) for x in move_transfers(m)])
 
     plan_path = c.ldir / "plan.json"
-    plan = list(json.loads(plan_path.read_text()).values()) if plan_path.exists() else []
+    plan = list(json.loads(plan_path.read_text(encoding="utf-8")).values()) if plan_path.exists() else []
     tracked = []
     for s in sorted(plan, key=lambda s: (s["kind"] != "waiver", -s["dMe"])):
         st = plan_status(s, c.moves, now, me)
@@ -266,7 +266,7 @@ def build(root: Path, whatif: list[dict] | None = None) -> dict:
                           and any(t[0] == it["playerId"] and t[2] == it["to"] for t in transfers_of(s, me) for it in m["items"])]
 
     hist_path = c.ldir / "history.jsonl"
-    history = [json.loads(x) for x in hist_path.read_text().splitlines() if x.strip()] if hist_path.exists() else []
+    history = [json.loads(x) for x in hist_path.read_text(encoding="utf-8").splitlines() if x.strip()] if hist_path.exists() else []
     avail = sorted((p for p in c.payload["players"] if str(p["id"]) not in c.snap["owners"] and p["team"] != "FA"),
                    key=lambda p: -c.model.value[p["id"]])[:80]
     return {
@@ -299,5 +299,5 @@ def append_history(ldir: Path, rep: dict) -> None:
     path = ldir / "history.jsonl"
     line = {"at": rep["generated"], "strength": mine["strength"], "playoffPct": mine["playoffPct"],
             "titlePct": mine["titlePct"], "projW": mine["proj"]["w"], "projL": mine["proj"]["l"]}
-    with path.open("a") as fh:
+    with path.open("a", encoding="utf-8") as fh:
         fh.write(json.dumps(line) + "\n")

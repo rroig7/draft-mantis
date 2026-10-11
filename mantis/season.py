@@ -547,7 +547,7 @@ def run(root: Path, sims: int = DEFAULT_SIMS, refresh_schedule: bool = False) ->
     snap = draftfeed.merge(espn_league.normalize(raw, store.get("swid"), espn_league.my_team(store)), draftfeed.HUB.get(sel["id"]))
     espn_league.require_rosters(snap)  # no outlook (or history/suggestion records) for an undrafted league
     ldir = espn_league.league_dir(root, sel)
-    payload = json.loads((root / "data" / "players.json").read_text())
+    payload = json.loads((root / "data" / "players.json").read_text(encoding="utf-8"))
     pro_days = sources.espn_pro_schedule(root / "data" / "raw", refresh_schedule)
     from . import moves
     known = moves.sync(ldir, moves.fetch_transactions(sel["id"], sel["season"], store))
@@ -558,7 +558,7 @@ def run(root: Path, sims: int = DEFAULT_SIMS, refresh_schedule: bool = False) ->
     rep["pendingMoves"] = sum(m["status"] == "PENDING" for m in known)
     rep.update(leagueId=int(sel["id"]), leagueSeason=int(sel["season"]), leagueKey=espn_league.league_key(sel),
                leagueName=snap["league"]["name"])
-    (ldir / "season.json").write_text(json.dumps(rep))
+    (ldir / "season.json").write_text(json.dumps(rep), encoding="utf-8")
     moves.record_plan(ldir, rep)      # remember what was suggested, to match against later moves
     moves.append_history(ldir, rep)   # odds over time
     return rep

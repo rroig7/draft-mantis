@@ -18,15 +18,15 @@ def snapshot() -> dict | None:
     season, moves = ldir / "season.json", ldir / "moves.json"
     if not season.exists():
         return None
-    snap = {"season": json.loads(season.read_text()), "moves": json.loads(moves.read_text()) if moves.exists() else None}
+    snap = {"season": json.loads(season.read_text(encoding="utf-8")), "moves": json.loads(moves.read_text(encoding="utf-8")) if moves.exists() else None}
     snap["at"] = (snap["moves"] or snap["season"]).get("generated")
     return snap
 
 
 def render(payload: dict | None = None, live: bool = False, snap: dict | None = None) -> str:
     if payload is None:
-        payload = json.loads((ROOT / "data" / "players.json").read_text())
-    tpl = (ROOT / "web" / "template.html").read_text()
+        payload = json.loads((ROOT / "data" / "players.json").read_text(encoding="utf-8"))
+    tpl = (ROOT / "web" / "template.html").read_text(encoding="utf-8")
     out = (tpl.replace("/*__MANTIS_DATA__*/null", json.dumps(payload).replace("</", "<\\/"))
               .replace("/*__MANTIS_LIVE__*/false", "true" if live else "false"))
     if snap and not live:

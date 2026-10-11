@@ -18,6 +18,7 @@ import argparse
 import csv
 import datetime as dt
 import json
+import sys
 from pathlib import Path
 
 from . import config, espn_league, model, site, sources
@@ -75,9 +76,9 @@ def build(refresh: bool) -> None:
         slim[-1]["projGp"] = p["proj"]["gp"] if p["proj"] else None
         slim[-1]["lastGp"] = p["last"]["gp"] if p["last"] else None
     payload = {"meta": meta, "players": slim}
-    (DATA / "players.json").write_text(json.dumps(payload))
+    (DATA / "players.json").write_text(json.dumps(payload), encoding="utf-8")
 
-    with open(DATA / "rankings_9cat.csv", "w", newline="") as fh:
+    with open(DATA / "rankings_9cat.csv", "w", newline="", encoding="utf-8") as fh:
         w = csv.writer(fh)
         w.writerow(["rank", "name", "team", "pos", "age", "score", "adp", "edge", "exp_gp", "fp_per_game",
                     *[config.CAT_LABELS[c] + "_z" for c in config.CATS], "flags"])
@@ -93,18 +94,18 @@ def build(refresh: bool) -> None:
 def write_dist(payload: dict | None = None) -> None:
     """Static copy for hosting: board + last season/moves snapshot (if a league is connected)."""
     DIST.mkdir(exist_ok=True)
-    (DIST / "draft-mantis.html").write_text(site.render(payload, live=False, snap=site.snapshot()))
+    (DIST / "draft-mantis.html").write_text(site.render(payload, live=False, snap=site.snapshot()), encoding="utf-8")
 
 
 def save_moves() -> None:
     from . import moves
     rep = moves.build(ROOT)
     sel = espn_league.load_store()["league"]
-    (espn_league.league_dir(ROOT, sel) / "moves.json").write_text(json.dumps(rep))
+    (espn_league.league_dir(ROOT, sel) / "moves.json").write_text(json.dumps(rep), encoding="utf-8")
 
 
 def top(args) -> None:
-    payload = json.loads((DATA / "players.json").read_text())
+    payload = json.loads((DATA / "players.json").read_text(encoding="utf-8"))
     players = payload["players"]
     ranked = model.score(players, weights_for(args.format, args.punt), teams=args.teams)
     if args.pos:
@@ -165,7 +166,7 @@ def league(args) -> None:
 def addon() -> None:
     import zipfile
     src = ROOT / "firefox-addon"
-    version = json.loads((src / "manifest.json").read_text())["version"]
+    version = json.loads((src / "manifest.json").read_text(encoding="utf-8"))["version"]
     DIST.mkdir(exist_ok=True)
     out = DIST / f"draft-mantis-bridge-{version}.xpi"
     with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
@@ -272,6 +273,11 @@ def schedule_cmd(action: str, at: str) -> None:
 
 
 def main() -> None:
+    for stream in (sys.stdout, sys.stderr):  # Windows consoles/pipes default to cp1252: keep names like "Jokić" printable
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass
     ap = argparse.ArgumentParser(prog="mantis", description="Draft Mantis - NBA fantasy draft scores")
     sub = ap.add_subparsers(dest="cmd", required=True)
     b = sub.add_parser("build")

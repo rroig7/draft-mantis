@@ -54,7 +54,7 @@ def _data_generated() -> str | None:
     except OSError:
         return None
     if _gen_cache.get("mtime") != mtime:
-        _gen_cache.update(mtime=mtime, value=json.loads(path.read_text())["meta"]["generated"])
+        _gen_cache.update(mtime=mtime, value=json.loads(path.read_text(encoding="utf-8"))["meta"]["generated"])
     return _gen_cache["value"]
 
 
@@ -77,7 +77,7 @@ def _season(force: bool = False, sims: int = season.DEFAULT_SIMS) -> dict:
     path = espn_league.league_dir(site.ROOT, sel) / "season.json"
     with State.season_lock:
         if not force and path.exists():
-            rep = json.loads(path.read_text())
+            rep = json.loads(path.read_text(encoding="utf-8"))
             fresh = time.time() - path.stat().st_mtime < 30 * 60
             same = (rep.get("dataGenerated") == _data_generated() and rep.get("leagueKey") == espn_league.league_key(sel)
                     and rep.get("myTeamId") == _league_snapshot().get("myTeamId"))
@@ -85,7 +85,7 @@ def _season(force: bool = False, sims: int = season.DEFAULT_SIMS) -> dict:
                 return rep
         rep = season.run(site.ROOT, sims=sims)
         rep["rosterSig"] = _roster_sig()
-        path.write_text(json.dumps(rep))
+        path.write_text(json.dumps(rep), encoding="utf-8")
         return rep
 
 
@@ -303,7 +303,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(200, State.moves_cache[2])
         rep = moves.build(site.ROOT)
         State.moves_cache = (key, time.time(), rep)
-        (espn_league.league_dir(site.ROOT, sel) / "moves.json").write_text(json.dumps(rep))  # feeds the hosted snapshot
+        (espn_league.league_dir(site.ROOT, sel) / "moves.json").write_text(json.dumps(rep), encoding="utf-8")  # feeds the hosted snapshot
         self._json(200, rep)
 
     def whatif(self):

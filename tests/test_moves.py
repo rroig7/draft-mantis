@@ -77,7 +77,7 @@ class ScenarioTests(unittest.TestCase):
         # written where pre-league-folder versions kept it: the first build must move it into data/leagues/555-2027/
         (self.root / "data" / "plan.json").write_text(json.dumps({"waiver:x": {
             "kind": "waiver", "add": self.best_fa, "drop": self.worst, "dMe": 0.1, "dMeFirst": 0.1, "key": "waiver:x",
-            "firstSeen": "2026-10-10 10:33", "lastSeen": "2026-10-10 10:33"}}))
+            "firstSeen": "2026-10-10 10:33", "lastSeen": "2026-10-10 10:33"}}), encoding="utf-8")
         espn_league.save_store({"league": {"id": 555, "season": 2027}, "swid": "{ME}", "espn_s2": "x" * 100})
         self.patches = [mock.patch.object(season, "fetch_raw", return_value=raw),
                         mock.patch.object(moves, "fetch_transactions", return_value=self.txs)]
@@ -109,9 +109,9 @@ class ScenarioTests(unittest.TestCase):
 
     def test_suggestion_shown_after_move_is_not_credited(self):
         ldir = espn_league.league_dir(self.root, {"id": 555, "season": 2027})
-        plan = json.loads((ldir / "plan.json").read_text())
+        plan = json.loads((ldir / "plan.json").read_text(encoding="utf-8"))
         plan["waiver:x"]["firstSeen"] = "2026-10-10 11:30"   # shown after the claim was made
-        (ldir / "plan.json").write_text(json.dumps(plan))
+        (ldir / "plan.json").write_text(json.dumps(plan), encoding="utf-8")
         r = moves.build(self.root)
         self.assertFalse(next(m for m in r["moves"] if m["id"] == "w1")["suggested"])
 
@@ -138,7 +138,7 @@ class LeagueSwitchTests(ScenarioTests):
         self.assertEqual(b["moves"], [])
         self.assertEqual(b["tracked"], [])                         # league A's suggestions do not leak
         self.assertTrue((self.root / "data" / "leagues" / "888-2027" / "transactions.json").exists())
-        self.assertEqual(len(json.loads((dir_a / "transactions.json").read_text())), 2)  # A untouched
+        self.assertEqual(len(json.loads((dir_a / "transactions.json").read_text(encoding="utf-8"))), 2)  # A untouched
 
     def test_undrafted_league_has_no_outlook(self):
         raw = TS.fake_raw(stacked_team=0)
