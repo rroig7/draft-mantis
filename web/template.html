@@ -878,13 +878,15 @@ function renderRail() {
 }
 
 /* ---------- live bar */
+let liveHtml = "", seenReschedule;
+const when = ms => new Date(ms).toLocaleString([], { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
 function renderLive() {
   const bar = $("livebar");
-  if (M) return renderMockBar(bar);
+  if (M) { liveHtml = ""; return renderMockBar(bar); }
   bar.hidden = !L && !liveErr;
-  if (bar.hidden) { document.title = "Draft Mantis"; return; }
+  if (bar.hidden) { document.title = "Draft Mantis"; liveHtml = ""; return; }
   bar.className = "livebar";
-  if (!L) { bar.classList.add("err"); bar.innerHTML = `<span class="pill"><span class="dot"></span>Offline</span><div class="lv"><b>League sync paused</b><span class="sub">${esc(liveErr)}</span></div>`; return; }
+  if (!L) { liveHtml = ""; bar.classList.add("err"); bar.innerHTML = `<span class="pill"><span class="dot"></span>Offline</span><div class="lv"><b>League sync paused</b><span class="sub">${esc(liveErr)}</span></div>`; return; }
   const lg = L.league, d = L.draft, clk = draftClock(), me = myTeamId();
   const rulesTxt = lg.format === "points" ? `${lg.scoringType.replace(/_/g, " ")} &middot; league scoring`
     : `${lg.cats.length}-cat (${lg.cats.map(c => LBL[c]).join(", ")})`;
@@ -892,7 +894,11 @@ function renderLive() {
   if (clk.done) { head = "Draft complete"; sub = `${d.picks.length} picks made. Board shows league rosters, including trades and pickups.`; }
   else if (!d.inProgress && !d.picks.length) {
     head = "Draft not started";
-    sub = d.date ? `Scheduled ${new Date(d.date).toLocaleString([], { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}. Checking every ${pollDelay() / 1000} seconds.` : `Checking every ${pollDelay() / 1000} seconds.`;
+    sub = d.date ? `Scheduled ${when(d.date)}. Checking every ${pollDelay() / 1000} seconds.` : `No start time set on ESPN yet. Checking every ${pollDelay() / 1000} seconds.`;
+  } else if (!d.picks.length && d.date && d.date > Date.now()) {
+    // ESPN opens the lobby (and calls the draft in progress) before the start time
+    head = `Draft starts ${when(d.date)}`;
+    sub = `Lobby open &middot; ${X().draft.pickOrder.length} teams` + (clk.myNext ? ` &middot; your first picks: #${clk.myNext}${clk.myAfter ? `, #${clk.myAfter}` : ""}` : "");
   } else if (!clk.snake) { head = `${d.type === "AUCTION" ? "Auction" : "Draft"} in progress`; sub = `${d.picks.length} players taken.`; }
   else {
     const t = teamById(clk.onClock), mine = clk.onClock === me;
@@ -910,12 +916,19 @@ function renderLive() {
   const feedOn = !!L.feed?.active;
   const left = d.clock?.msLeft != null ? Math.ceil(d.clock.msLeft / 1000) : null;
   if (left != null) liveClockEnds = Date.now() + left * 1000;
+  const rs = d.rescheduled && Date.now() - d.rescheduled.at < 3 * 3600e3 ? d.rescheduled : null;
+  if ((rs?.at ?? null) !== seenReschedule) {  // toast only for a change seen while the page is open
+    if (seenReschedule !== undefined && rs) toast(`ESPN draft changed: now ${rs.to ? when(rs.to) : "no start time"}. The board follows the new draft.`);
+    seenReschedule = rs?.at ?? null;
+  }
+  const reschedNote = rs && !clk.done ? `<div class="lv"><span class="lbl">Draft rescheduled</span><span class="sub">${rs.from ? when(rs.from) : "Earlier draft"} &rarr; ${rs.to ? when(rs.to) : "no start time yet"}. Picks from before the change were cleared.</span></div>` : "";
   const noFeedWarn = !feedOn && d.inProgress && !clk.done
     ? `<div class="lv"><span class="lbl">Picks may not appear</span><span class="sub">ESPN's API can hold picks back until the draft ends. Install the Firefox add-on (Connect ESPN league &rarr; step 3).</span></div>` : "";
-  const room = me != null ? `https://fantasy.espn.com/basketball/draft?leagueId=${encodeURIComponent(lg.id)}&seasonId=${encodeURIComponent(lg.season)}&teamId=${encodeURIComponent(me)}` : "";
-  bar.innerHTML = `<span class="pill"><span class="dot"></span>${feedOn ? "Live &middot; draft room" : "Live &middot; ESPN API"}</span>
-    ${left != null && !clk.done ? `<span class="countdown" id="liveCountdown" aria-label="Time left on the clock">${clockTxt(left)}</span>` : ""}
+  const room = me != null ? `https://fantasy.espn.com/basketball/draft?leagueId=${encodeURIComponent(lg.id)}&seasonId=${encodeURIComponent(lg.season)}&teamId=${encodeURIComponent(me)}${L.memberId ? `&memberId=${encodeURIComponent(L.memberId)}` : ""}` : "";
+  const html = `<span class="pill"><span class="dot"></span>${feedOn ? "Live &middot; draft room" : "Live &middot; ESPN API"}</span>
+    ${left != null && !clk.done ? `<span class="countdown" id="liveCountdown" aria-label="Time left on the clock"></span>` : ""}
     <div class="lv"><b>${head}</b><span class="sub">${sub}</span></div>
+    ${reschedNote}
     ${noFeedWarn}
     <div class="lv"><span class="lbl">${esc(lg.name)}</span><span class="sub">${rulesTxt} &middot; ${lg.size} teams &middot; ${lg.rosterSize} spots${lg.unsupported.length ? ` &middot; not modeled: ${esc(lg.unsupported.join(", "))}` : ""}</span></div>
     ${last ? `<div class="lv"><span class="lbl">Latest picks</span><span class="feed">${last}</span></div>` : ""}
@@ -923,7 +936,12 @@ function renderLive() {
     <span class="spacer"></span>
     ${room ? `<a class="mbtn" href="${room}" target="_blank" rel="noopener">Open ESPN draft room</a>` : ""}
     <label class="tog" for="useLg"><input type="checkbox" id="useLg" ${S.useLeague ? "checked" : ""}> Use league settings</label>
-    <span class="lbl">${feedOn ? "Instant updates from your draft room" : `Updated ${esc(L.fetched)} &middot; every ${pollDelay() / 1000}s`}${liveErr ? " &middot; retrying" : ""}</span>`;
+    <span class="lbl" id="liveUpd"></span>`;
+  // rebuild only when something changed: swapping the bar on every poll swallowed clicks on its buttons and link
+  if (html !== liveHtml) { bar.innerHTML = html; liveHtml = html; }
+  const cd = $("liveCountdown");
+  if (cd) cd.textContent = clockTxt(left);
+  $("liveUpd").textContent = (feedOn ? "Instant updates from your draft room" : `Updated ${L.fetched} · every ${pollDelay() / 1000}s`) + (liveErr ? " · retrying" : "");
 }
 
 /* ---------- player + team dialogs */

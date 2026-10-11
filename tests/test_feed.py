@@ -55,6 +55,52 @@ class FeedParseTests(unittest.TestCase):
         self.assertFalse(draftfeed.merge(snap, None)["feed"]["active"])
 
 
+class RescheduleTests(unittest.TestCase):
+    """Commissioner resets/reschedules mid-draft: picks streamed for the old draft must not leak into the new one."""
+
+    def setUp(self):
+        self.hub = draftfeed.FeedHub()
+        self.hub.ingest(777, ["SELECTED 3 3112335 1", "SELECTED 1 4278073 1"])
+        self.base = espn_league.normalize(fake_league(), SWID)["draft"]
+        self.base.update(date=1791684000000, inProgress=True, picks=[])
+
+    def snap(self, **draft):
+        s = espn_league.normalize(fake_league(), SWID)
+        s["draft"].update({**self.base, **draft})
+        s["owners"] = {}
+        for t in s["teams"]:
+            t["roster"] = []
+        return s
+
+    def test_reschedule_drops_old_picks(self):
+        self.assertIsNone(self.hub.reconcile(777, self.snap()["draft"], 1.0))       # first look: baseline
+        self.assertEqual(len(draftfeed.merge(self.snap(), self.hub.get(777))["draft"]["picks"]), 2)
+        later = dict(date=1791685800000, pickOrder=[1, 2, 3, 4, 6, 7, 9, 10])
+        self.assertIsNone(self.hub.reconcile(777, self.snap(**later)["draft"], 2.0))  # one fetch is not enough
+        self.assertIsNone(self.hub.reconcile(777, self.snap(**later)["draft"], 2.0))  # same cached fetch again
+        ch = self.hub.reconcile(777, self.snap(**later)["draft"], 3.0)
+        self.assertEqual((ch["from"], ch["to"]), (1791684000000, 1791685800000))
+        merged = draftfeed.merge(self.snap(**later), self.hub.get(777))
+        self.assertEqual(merged["draft"]["picks"], [])
+        self.assertEqual(merged["owners"], {})
+        # the new draft's own picks still come through
+        self.hub.ingest(777, ["SELECTED 1 4278073 1"])
+        self.assertEqual(len(draftfeed.merge(self.snap(**later), self.hub.get(777))["draft"]["picks"]), 1)
+
+    def test_half_edited_settings_flicker_is_ignored(self):
+        self.hub.reconcile(777, self.snap()["draft"], 1.0)
+        self.hub.reconcile(777, self.snap(date=None)["draft"], 2.0)                  # one odd read mid-edit
+        self.assertIsNone(self.hub.reconcile(777, self.snap()["draft"], 3.0))
+        self.assertEqual(len(draftfeed.merge(self.snap(), self.hub.get(777))["draft"]["picks"]), 2)
+
+    def test_quiet_feed_ignored_when_no_draft_running(self):
+        feed = self.hub.get(777)
+        feed.last_event -= draftfeed.ACTIVE_FOR + 1
+        merged = draftfeed.merge(self.snap(inProgress=False), feed)
+        self.assertEqual(merged["draft"]["picks"], [])
+        self.assertFalse(merged["feed"]["active"])
+
+
 class LeagueSwitchServerTests(unittest.TestCase):
     """Switching the connected league (or your team) must not serve the previous league's season or moves."""
 

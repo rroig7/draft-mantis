@@ -109,7 +109,7 @@ class SeasonTests(unittest.TestCase):
         self.assertEqual(rep["teams"][0]["id"], 1, "stacked team should be the title favorite")
         self.assertGreater(teams[1]["strength"], 75)
         for t in rep["teams"]:
-            self.assertEqual(sum(t["proj"].values()), 19)  # 19 weekly matchups each
+            self.assertAlmostEqual(sum(t["proj"].values()), 19, delta=0.2)  # 19 weekly matchups each (W-L-T rounded to 0.1)
         sug = rep["suggestions"]
         self.assertIsNotNone(sug)
         mine = next(t for t in raw_rosters(fake_raw()) if t[0] == 7)[1]

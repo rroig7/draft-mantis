@@ -110,7 +110,11 @@ def _league_snapshot(force: bool = False) -> dict:
         cached = (key, time.time(), espn_league.normalize(raw, s.get("swid"), espn_league.my_team(s)))
         with State.lock:
             State.cache = cached
-    return draftfeed.merge(copy.deepcopy(cached[2]), feed)
+    change = draftfeed.HUB.reconcile(sel["id"], cached[2]["draft"], cached[1])
+    snap = draftfeed.merge(copy.deepcopy(cached[2]), feed)
+    if change:
+        snap["draft"]["rescheduled"] = change
+    return snap
 
 
 def _run_rebuild():
@@ -233,7 +237,8 @@ class Handler(BaseHTTPRequestHandler):
         self._json(200, _status())
 
     def league(self):
-        self._json(200, _league_snapshot())
+        # memberId (your SWID) goes in ESPN's own "Join draft" link; espn_s2 never leaves the server
+        self._json(200, {**_league_snapshot(), "memberId": espn_league.load_store().get("swid") or None})
 
     def set_my_team(self):
         """Remember which team is yours in the connected league (when your login cookie can't tell)."""

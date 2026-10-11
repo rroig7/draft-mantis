@@ -7,7 +7,8 @@ browser and forwards its command lines here. Observed formats (community-documen
     SELECTED  <teamId> <playerId> <n>     team drafted player
 
 ESPN replays the whole draft to a client that (re)joins, so picks are de-duplicated by player.
-Commissioner undos are not handled: their message format has not been observed.
+Commissioner undos are not handled: their message format has not been observed. A rescheduled or
+re-ordered draft is: FeedHub.reconcile() checks every ESPN snapshot and drops picks from the old draft.
 """
 
 from __future__ import annotations
@@ -54,6 +55,10 @@ class LeagueFeed:
             self.commands["unparsed"] += 1
         return False
 
+    def reset(self) -> None:
+        """Forget picks and clock from a draft the commissioner has since reset or rescheduled."""
+        self.picks, self.seen, self.clock = [], set(), None
+
     @property
     def active(self) -> bool:
         return bool(self.last_event) and time.time() - self.last_event < ACTIVE_FOR
@@ -73,6 +78,7 @@ class FeedHub:
         self.cond = threading.Condition()
         self.version = 0
         self.feeds: dict[int, LeagueFeed] = {}
+        self.drafts: dict[int, dict] = {}  # league -> schedule last confirmed from ESPN, see reconcile()
 
     def ingest(self, league_id: int, lines: list[str], team_id: int | None = None) -> dict:
         with self.cond:
@@ -85,6 +91,39 @@ class FeedHub:
                 self.cond.notify_all()
             return {"accepted": len(lines), "changed": changed, **feed.status()}
 
+    def reconcile(self, league_id: int, draft: dict, fetched_at: float) -> dict | None:
+        """Validate the draft against ESPN on every league fetch; returns the latest reschedule, if any.
+
+        A draft is identified by its start time, type and pick order. When the commissioner changes any of
+        them (a reschedule, teams added or removed), the draft room's picks for the old draft no longer apply
+        and are dropped. A new schedule counts only once two separate fetches agree, because ESPN's read API
+        briefly serves half-edited settings (no start time) while the commissioner is still making changes."""
+        sess = draft_session(draft)
+        with self.cond:
+            st = self.drafts.get(league_id)
+            if st is None:
+                self.drafts[league_id] = {"session": sess, "date": draft.get("date"), "change": None}
+                return None
+            if sess == st["session"]:
+                st.pop("cand", None)
+                return st["change"]
+            cand = st.get("cand")
+            if not cand or cand[0] != sess:
+                st["cand"] = (sess, fetched_at)
+                return st["change"]
+            if cand[1] == fetched_at:  # same fetch served twice from cache: not a second opinion
+                return st["change"]
+            prev = st["date"] or (st["change"] or {}).get("from")
+            st.update(session=sess, date=draft.get("date"),
+                      change={"from": prev, "to": draft.get("date"), "at": int(time.time() * 1000)})
+            st.pop("cand")
+            feed = self.feeds.get(league_id)
+            if feed:
+                feed.reset()
+            self.version += 1
+            self.cond.notify_all()
+            return st["change"]
+
     def get(self, league_id) -> LeagueFeed | None:
         with self.cond:
             return self.feeds.get(league_id)
@@ -95,12 +134,20 @@ class FeedHub:
             return self.version
 
 
+def draft_session(draft: dict) -> tuple:
+    return draft.get("date"), draft.get("type"), tuple(draft.get("pickOrder") or ())
+
+
 def merge(snap: dict, feed: LeagueFeed | None) -> dict:
     """Overlay draft-room picks and the on-clock team onto a normalized ESPN league snapshot."""
+    draft = snap["draft"]
     if not feed or not feed.last_event:
         snap["feed"] = {"active": False}
         return snap
-    draft = snap["draft"]
+    if not feed.active and not draft["inProgress"] and not draft["drafted"]:
+        # ESPN says no draft is running and the room has been quiet: whatever it streamed earlier is stale
+        snap["feed"] = {**feed.status(), "active": False}
+        return snap
     api_picks = draft["picks"]
     if len(feed.picks) >= len(api_picks):
         # The draft room is ahead (ESPN's read API reports little or nothing mid-draft): its order is the pick order.
