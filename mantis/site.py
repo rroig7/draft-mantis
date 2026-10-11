@@ -10,7 +10,12 @@ ROOT = Path(__file__).resolve().parent.parent
 
 def snapshot() -> dict | None:
     """Last season report + moves report, embedded in the hosted (static) copy of the board."""
-    season, moves = ROOT / "data" / "season.json", ROOT / "data" / "moves.json"
+    from . import espn_league
+    sel = espn_league.load_store().get("league")
+    if not sel:
+        return None
+    ldir = espn_league.league_dir(ROOT, sel)
+    season, moves = ldir / "season.json", ldir / "moves.json"
     if not season.exists():
         return None
     snap = {"season": json.loads(season.read_text()), "moves": json.loads(moves.read_text()) if moves.exists() else None}

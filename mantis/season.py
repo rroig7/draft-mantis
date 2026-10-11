@@ -544,17 +544,21 @@ def run(root: Path, sims: int = DEFAULT_SIMS, refresh_schedule: bool = False) ->
     if not sel:
         raise espn_league.EspnError("Connect your ESPN league first (python3 -m mantis league --id <leagueId>).", 409)
     raw = fetch_raw(sel["id"], sel["season"], store)
-    snap = draftfeed.merge(espn_league.normalize(raw, store.get("swid")), draftfeed.HUB.get(sel["id"]))
+    snap = draftfeed.merge(espn_league.normalize(raw, store.get("swid"), espn_league.my_team(store)), draftfeed.HUB.get(sel["id"]))
+    espn_league.require_rosters(snap)  # no outlook (or history/suggestion records) for an undrafted league
+    ldir = espn_league.league_dir(root, sel)
     payload = json.loads((root / "data" / "players.json").read_text())
     pro_days = sources.espn_pro_schedule(root / "data" / "raw", refresh_schedule)
     from . import moves
-    known = moves.sync(root, moves.fetch_transactions(sel["id"], sel["season"], store))
+    known = moves.sync(ldir, moves.fetch_transactions(sel["id"], sel["season"], store))
     pending = [x for m in reversed(known) if m["status"] == "PENDING" for x in moves.move_transfers(m)]
     now = {t["id"]: list(t["roster"]) for t in snap["teams"]}
     rep = report(payload, raw, snap, pro_days, sims, seed=moves.SEED if sims == moves.SCENARIO_SIMS else None,
                  suggest_rosters=moves.apply(now, pending) if pending else None)
     rep["pendingMoves"] = sum(m["status"] == "PENDING" for m in known)
-    (root / "data" / "season.json").write_text(json.dumps(rep))
-    moves.record_plan(root, rep)      # remember what was suggested, to match against later moves
-    moves.append_history(root, rep)   # odds over time
+    rep.update(leagueId=int(sel["id"]), leagueSeason=int(sel["season"]), leagueKey=espn_league.league_key(sel),
+               leagueName=snap["league"]["name"])
+    (ldir / "season.json").write_text(json.dumps(rep))
+    moves.record_plan(ldir, rep)      # remember what was suggested, to match against later moves
+    moves.append_history(ldir, rep)   # odds over time
     return rep

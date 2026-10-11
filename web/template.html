@@ -337,6 +337,14 @@ tbody tr.blocked td { opacity: 0.42; }
 .wilist button { border: 0; background: none; color: var(--ink-3); cursor: pointer; font-size: 16px; line-height: 1; padding: 2px 6px; }
 .spark { display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--ink-2); }
 .spark svg { width: 220px; height: 44px; overflow: visible; }
+.tlink { border: 0; background: none; padding: 0; font: inherit; color: inherit; cursor: pointer; text-align: left; text-decoration: underline; text-decoration-color: var(--line); text-underline-offset: 3px; }
+.tlink:hover { text-decoration-color: var(--leaf); color: var(--leaf); }
+.ptable tbody tr { cursor: pointer; }
+.ptable tbody tr:hover td { background: var(--leaf-soft); }
+dialog.wide { width: min(900px, calc(100vw - 32px)); }
+.rtable { width: 100%; font-size: 13px; }
+.rtable td.pn { font-weight: 600; }
+.rtable td .sub2 { display: block; font: 500 11.5px/1.2 var(--cond); letter-spacing: 0.04em; color: var(--ink-3); text-transform: uppercase; }
 .emptyv { background: var(--surface); border: 1px dashed var(--line); border-radius: var(--r); padding: 22px; display: grid; gap: 10px; max-width: 760px; }
 .emptyv h3 { margin: 0; }
 .feed { font: 500 12.5px/1.4 var(--cond); letter-spacing: 0.03em; color: var(--ink-2); }
@@ -486,6 +494,7 @@ try { Object.assign(S, JSON.parse(localStorage.getItem(KEY) || "{}")); } catch (
 const save = () => { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) {} };
 
 let L = null;          // live ESPN league snapshot (from the local server)
+let LKEY = null;       // league + team the season and moves data belong to
 let M = null;          // mock draft in progress; same shape as L, built in the browser
 try { M = JSON.parse(localStorage.getItem("draft-mantis-mock") || "null"); } catch (e) {}
 const X = () => M || L; // whichever draft drives the board
@@ -621,7 +630,25 @@ function scoreAll() {
 }
 
 /* ---------- ownership: live league wins over manual marks */
-const myTeamId = () => M ? M.myTeamId : L ? (S.myTeam ?? L.myTeamId) : null;
+const myTeamId = () => M ? M.myTeamId : L ? L.myTeamId : null;  // the server remembers "this is my team" per league
+const leagueKey = () => L ? `${L.leagueKey ?? L.league.id + "-" + L.league.season}:${L.myTeamId ?? ""}` : null;
+/* Call whenever L changes. A different league, or a different team in it, makes every season and moves result
+   stale: drop them so the Season tab rebuilds for what is connected now. */
+/* Mirrors espn_league.rosters_ready(): no season outlook before the draft */
+const rostersReady = lg => lg.draft.drafted || lg.teams.reduce((n, t) => n + t.roster.length, 0) >= lg.teams.length * Math.min(8, lg.league.rosterSize);
+function syncLeague() {
+  const k = leagueKey();
+  if (k === LKEY) return;
+  const before = LKEY;
+  LKEY = k;
+  if (!LIVE) return;
+  SEASON = null; MOVES = null; WI = []; prevStatus = null; wiPartner = null; seasonErr = ""; movesErr = "";
+  if (before && k) {
+    const sameLeague = before.split(":")[0] === k.split(":")[0];
+    toast(sameLeague ? `Your team is now ${teamById(L.myTeamId)?.name ?? "set"}. Rebuilding the season outlook.`
+                     : `Now following ${L.league.name}. Rebuilding the season outlook.`);
+  }
+}
 const teamById = id => X()?.teams.find(t => t.id === id);
 function ownerOf(id) {
   if (X()) { const t = X().owners[String(id)]; return t == null ? null : t; }
@@ -1037,7 +1064,7 @@ $("cDlg").addEventListener("submit", async e => {
 async function connectLeague(id, season, msgKey) {
   try {
     L = await api("/api/league", { method: "POST", body: JSON.stringify({ id: +id, season: +season }) });
-    liveErr = ""; S.myTeam = null; save();
+    liveErr = ""; syncLeague(); save();
     $("cDlg").close(); render(); schedule(0);
   } catch (er) { cMsg[msgKey] = er.message; renderConnect(); }
 }
@@ -1053,7 +1080,7 @@ $("cDlg").addEventListener("click", async e => {
   } else if (act === "forget") {
     status = await api("/api/credentials", { method: "DELETE" }); foundLeagues = null; renderConnect();
   } else if (act === "disconnect") {
-    await api("/api/league", { method: "DELETE" }); L = null; liveErr = ""; clearTimeout(timer); render(); await openConnect();
+    await api("/api/league", { method: "DELETE" }); L = null; liveErr = ""; syncLeague(); clearTimeout(timer); render(); await openConnect();
   } else if (act === "rebuild") {
     cMsg.data = ""; await api("/api/rebuild", { method: "POST" }); status.rebuild = { running: true }; renderConnect();
     const wait = async () => {
@@ -1389,10 +1416,14 @@ function renderView() {
 }
 async function loadSeason(force = false) {
   if (!LIVE || seasonBusy) return;
+  const key = LKEY;
   seasonBusy = true; seasonErr = ""; renderSeason();
-  try { SEASON = await api("/api/season", force ? { method: "POST", body: JSON.stringify({ sims: 1500 }) } : {}); }
-  catch (e) { seasonErr = e.message; }
-  seasonBusy = false; renderSeason();
+  let r = null, err = "";
+  try { r = await api("/api/season", force ? { method: "POST", body: JSON.stringify({ sims: 1500 }) } : {}); }
+  catch (e) { err = e.message; }
+  seasonBusy = false;
+  if (key !== LKEY) { renderSeason(); return; }  // league switched while simulating: this result is for the old one
+  SEASON = r; seasonErr = err; renderSeason();
 }
 const pctBar = (v, cls = "") => `<span class="pbar ${cls}"><i style="width:${Math.max(1, v * 0.7).toFixed(0)}px"></i><span>${v.toFixed(v >= 10 || v === 0 ? 0 : 1)}%</span></span>`;
 const rankCell = (r, n) => { const x = (r - 1) / Math.max(n - 1, 1), good = x < 0.5;
@@ -1402,6 +1433,13 @@ function renderSeason() {
   const emptyState = (h, body) => `<div class="emptyv"><h3>${h}</h3>${body}</div>`;
   if (!LIVE && !SEASON) { v.innerHTML = emptyState("Season outlook runs on your computer", `<p class="help">Projected standings, playoff and title odds, trade ideas and waiver pickups need your league's live rosters and schedule. In the project folder run <code>python3 -m mantis serve</code>, connect your ESPN league, and open the Season tab there.</p><p class="help">Terminal version: <code>python3 -m mantis season</code>.</p>`); return; }
   if (LIVE && !L) { v.innerHTML = emptyState("Connect your league first", `<p class="help">The season model needs your ESPN league's rosters and schedule.</p><div class="btns"><button type="button" class="btn" data-sv="connect">Connect ESPN league</button></div>`); return; }
+  if (LIVE && L && !rostersReady(L)) {
+    const d = L.draft;
+    v.innerHTML = emptyState(`${esc(L.league.name)} ${d.inProgress ? "is drafting" : "has not drafted yet"}`,
+      `<p class="help">The season outlook, move tracking and trade ideas start once rosters are set. ${d.inProgress ? "Follow the draft live on the Draft board tab." : (d.date ? `Your draft is scheduled for ${esc(new Date(d.date).toLocaleString([], { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }))}. ` : "") + "Until then, practice with a mock draft using this league's settings."}</p>
+       <div class="btns"><button type="button" class="btn" data-sv="board">Open the Draft board</button>${d.inProgress ? "" : `<button type="button" class="btn alt" data-sv="mock">Mock draft</button>`}</div>`);
+    return;
+  }
   if (seasonBusy && !SEASON) { v.innerHTML = emptyState("Simulating your season…", `<p class="help">Playing out every remaining matchup 1,500 times. This takes a few seconds.</p>`); return; }
   if (seasonErr && !SEASON) { v.innerHTML = emptyState("Could not build the season outlook", `<p class="err">${esc(seasonErr)}</p><div class="btns"><button type="button" class="btn" data-sv="rerun">Try again</button></div>`); return; }
   if (!SEASON) { loadSeason(); return; }
@@ -1410,13 +1448,13 @@ function renderSeason() {
   const teamName = id => esc(R2.teams.find(t => t.id === id)?.name ?? `Team ${id}`);
   const me = R2.teams.find(t => t.isMine);
   const catLbl = c => c === "fp" ? "FP" : LBL[c];
-  const head = `<div class="sv-head"><div><h2>Season outlook</h2>
+  const head = `<div class="sv-head"><div><span class="lbl">${esc(R2.leagueName ?? L?.league.name ?? "")}${R2.leagueSeason ? ` &middot; ${R2.leagueSeason - 1}&ndash;${String(R2.leagueSeason).slice(2)}` : ""}</span><h2>Season outlook</h2>
       <p>${R2.sims.toLocaleString()} simulated seasons over ${R2.remainingPeriods} remaining matchup weeks${R2.usedFallbackSchedule ? " (ESPN has not published matchups yet, so a round-robin is assumed)" : ""}. ${R2.seasonStarted ? "Player lines blend this season's stats with projections, more each game." : "The season starts Oct 20; until then this runs on projections, and real stats blend in daily after that."} Player data ${esc(R2.dataGenerated)}, simulated ${esc(R2.generated)}.</p></div>
       ${LIVE ? `<div class="btns"><button type="button" class="btn alt" data-sv="rerun" ${seasonBusy ? "disabled" : ""}>${seasonBusy ? "Simulating…" : "Re-run with latest rosters"}</button></div>`
         : `<span class="tagw" title="Run python3 -m mantis serve for live updates">Snapshot &middot; ${esc(SNAP?.at ?? R2.generated)}</span>`}</div>`;
   const table = `<div class="board-wrap" style="max-height:none"><table class="ptable"><thead><tr>
       <th class="l">#</th><th class="l">Team</th><th>Record</th><th>Proj. W-L-T</th><th>Strength</th><th>Playoffs</th><th>Title</th><th class="l">Category rank</th></tr></thead><tbody>
-      ${R2.teams.map((t, i) => `<tr class="${t.isMine ? "me" : ""}"><td class="l">${i + 1}</td><td class="l tn">${esc(t.name)}${t.isMine ? " (you)" : ""}</td>
+      ${R2.teams.map((t, i) => `<tr class="${t.isMine ? "me" : ""}" data-steam="${t.id}"><td class="l">${i + 1}</td><td class="l tn"><button type="button" class="tlink" data-steam="${t.id}">${esc(t.name)}</button>${t.isMine ? " (you)" : ""}</td>
         <td>${esc(t.record || "0-0")}</td><td>${t.proj.w.toFixed(1)}-${t.proj.l.toFixed(1)}${t.proj.t >= 0.05 ? "-" + t.proj.t.toFixed(1) : ""}</td>
         <td>${pctBar(t.strength, "alt")}</td><td>${pctBar(t.playoffPct)}</td><td>${pctBar(t.titlePct)}</td>
         <td class="l"><span class="ranks">${cats.map(c => rankCell(t.catRank[c], n)).join("")}</span></td></tr>`).join("")}
@@ -1430,7 +1468,7 @@ function renderSeason() {
   const catChips = cs => Object.entries(cs).filter(([, d]) => Math.abs(d) >= 0.02).sort((a, b) => b[1] - a[1])
     .map(([c, d]) => `<span class="chip ${d > 0 ? "hi" : "lo"}">${catLbl(c)} ${d > 0 ? "+" : ""}${Math.round(d * 100)}</span>`).join("");
   const trades = sug.trades.length ? sug.trades.map((t, i) => `<div class="idea">
-      <div class="top"><span class="lbl">With ${teamName(t.partner)}</span>${t.winWin ? `<span class="tagw">Helps both teams</span>` : `<span class="muted">Fair for them: ${t.dThem >= 0 ? "+" : ""}${(t.dThem * 100).toFixed(1)} pts</span>`}</div>
+      <div class="top"><span class="lbl">With <button type="button" class="tlink" data-steam="${t.partner}">${teamName(t.partner)}</button></span>${t.winWin ? `<span class="tagw">Helps both teams</span>` : `<span class="muted">Fair for them: ${t.dThem >= 0 ? "+" : ""}${(t.dThem * 100).toFixed(1)} pts</span>`}</div>
       <div class="swap"><div><span class="lbl">You give</span>${t.give.map(id => `<b>${nm(id)}</b>`).join("")}</div><span class="arrow" aria-hidden="true">&rarr;</span><div><span class="lbl">You get</span>${t.get.map(id => `<b>${nm(id)}</b>`).join("")}</div></div>
       <div class="top"><span><span class="delta">+${(t.dMe * 100).toFixed(1)}</span> <span class="muted">points of weekly win rate</span></span><button type="button" class="copyb" data-trade="${i}">Copy offer</button></div>
       <div class="chips">${catChips(t.cats)}</div></div>`).join("")
@@ -1458,8 +1496,10 @@ const TX_LABEL = { WAIVER: "Waiver claim", FREEAGENT: "Free-agent add", ROSTER: 
 async function loadMoves(quiet, fresh) {
   if (!LIVE || !L || movesBusy) return;
   movesBusy = true; if (!quiet) renderSeason();
+  const key = LKEY;
   try {
     const r = await api("/api/moves" + (fresh ? "?fresh=1" : ""));
+    if (key !== LKEY) throw new Error("stale");  // league switched while loading
     const st = Object.fromEntries(r.moves.map(m => [m.id, m.status]));
     if (prevStatus) {
       const changed = r.moves.filter(m => prevStatus[m.id] && prevStatus[m.id] !== m.status);
@@ -1472,13 +1512,14 @@ async function loadMoves(quiet, fresh) {
     prevStatus = st;
     MOVES = { ...r, custom: MOVES?.custom ?? null };
     movesErr = "";
-  } catch (e) { movesErr = e.message; }
+  } catch (e) { if (e.message !== "stale") movesErr = e.message; }
   movesBusy = false; renderSeason();
 }
 async function runWhatIf() {
   if (!WI.length || wiBusy) return;
   wiBusy = true; renderSeason();
-  try { const r = await api("/api/whatif", { method: "POST", body: JSON.stringify({ moves: WI.map(w => w.move) }) }); MOVES = { ...MOVES, custom: r.custom }; }
+  const key = LKEY;
+  try { const r = await api("/api/whatif", { method: "POST", body: JSON.stringify({ moves: WI.map(w => w.move) }) }); if (key === LKEY && MOVES) MOVES = { ...MOVES, custom: r.custom }; }
   catch (e) { toast(e.message); }
   wiBusy = false; renderSeason();
 }
@@ -1552,10 +1593,71 @@ function movesHtml() {
       <div class="btns"><button type="button" class="btn" data-wi="run" ${!WI.length || wiBusy ? "disabled" : ""}>${wiBusy ? "Simulating…" : "Simulate what-if"}</button>${WI.length ? `<button type="button" class="btn alt" data-wi="clear">Clear</button>` : ""}</div>
     </div>`}</div>`;
 }
+/* ---------- team card from the Season tab */
+function seasonRoster(id) {
+  return teamById(id)?.roster ?? MOVES?.teams?.find(t => t.id === id)?.roster ?? null;
+}
+function openSeasonTeam(id) {
+  const R2 = SEASON; if (!R2) return;
+  const row = R2.teams.find(t => t.id === id); if (!row) return;
+  const rank = R2.teams.indexOf(row) + 1, n = R2.teams.length;
+  const roster = seasonRoster(id) ?? [];
+  const nm = pid => esc(R2.names[String(pid)] ?? MOVES?.names?.[String(pid)] ?? byId.get(pid)?.name ?? `Player ${pid}`);
+  const val = pid => RANK.get(pid)?.value ?? -99;
+  const players = roster.slice().sort((a, b) => val(b) - val(a));
+  const pts = R2.cats.length === 1 && R2.cats[0] === "fp";
+  const played = R2.seasonStarted;
+  const perGame = p => pts ? fpOf(p).toFixed(1) : R2.cats.reduce((a, c) => a + (p.z[c] ?? 0), 0).toFixed(1);
+  const rows = players.map(pid => {
+    const p = byId.get(pid), r = RANK.get(pid);
+    if (!p) return `<tr><td class="l pn">${nm(pid)}<span class="sub2">not in the Mantis player pool</span></td><td></td><td></td>${played ? "<td></td>" : ""}</tr>`;
+    const inj = p.injury !== "ACTIVE" ? `<span class="flag ${p.injury === "OUT" ? "Out" : "DTD"}">${p.injury === "OUT" ? "Out" : "DTD"}</span>` : "";
+    const form = p.flags.filter(f => f === "Hot" || f === "Cold").map(f => `<span class="flag ${f === "Hot" ? "Breakout" : "Durability"}">${f}</span>`).join("");
+    return `<tr data-player="${pid}"><td class="l pn">${esc(p.name)} ${inj}${form}<span class="sub2">${esc(p.team)} &middot; ${p.pos.join("/")} &middot; age ${p.age ?? "?"}</span></td>
+      <td>${r ? r.score.toFixed(0) : "&ndash;"}</td><td>${perGame(p)}</td>${played ? `<td>${p.curGp ? `${p.curGp} g` : "&ndash;"}</td>` : ""}</tr>`;
+  }).join("");
+  const st = teamState(roster);
+  const ideas = (R2.suggestions?.trades ?? []).filter(t => t.partner === id);
+  const catLbl = c => c === "fp" ? "FP" : LBL[c];
+  const catChips = R2.cats.map(c => { const r = row.catRank?.[c]; if (r == null) return "";
+    return `<span class="chip ${r <= Math.ceil(n / 3) ? "hi" : r > n - Math.ceil(n / 3) ? "lo" : ""}">${catLbl(c)} ${ordinal(r)}</span>`; }).join("");
+  $("dBody").innerHTML = `
+    <header><div><div class="lbl">${esc(R2.leagueName ?? "")} &middot; projected ${ordinal(rank)} of ${n}${row.isMine ? " &middot; your team" : ""}</div>
+      <h3 id="dName">${esc(row.name)}</h3></div>
+      <button type="button" class="close" data-close aria-label="Close">&times;</button></header>
+    <div class="kpis">
+      <div class="kpi"><span class="lbl">Record</span><b>${esc(row.record || "0-0")}</b></div>
+      <div class="kpi"><span class="lbl">Projected</span><b>${row.proj.w.toFixed(1)}-${row.proj.l.toFixed(1)}</b></div>
+      <div class="kpi lead"><span class="lbl">Playoffs</span><b>${row.playoffPct.toFixed(0)}%</b></div>
+      <div class="kpi"><span class="lbl">Title</span><b>${row.titlePct.toFixed(1)}%</b></div>
+      <div class="kpi"><span class="lbl">Strength</span><b>${row.strength.toFixed(0)}%</b></div>
+    </div>
+    ${catChips ? `<div><div class="lbl" style="margin-bottom:6px">${pts ? "Weekly points rank" : "Category ranks"}</div><div class="chips">${catChips}</div></div>` : ""}
+    <div class="cols">
+      <div><div class="lbl" style="margin-bottom:6px">Roster (${roster.length}), best first</div>
+        ${roster.length ? `<div class="tablewrap"><table class="mini rtable"><thead><tr><th>Player</th><th>Mantis</th><th>${pts ? "FP/G" : "Value/G"}</th>${played ? "<th>Played</th>" : ""}</tr></thead><tbody>${rows}</tbody></table></div>`
+          : `<p class="muted">No roster data for this team yet.</p>`}</div>
+      <div><div class="lbl" style="margin-bottom:6px">Starting lineup</div><ul class="lineup">${lineupHtml(st, "")}</ul>
+        <div class="poscount" style="margin-top:8px">${posCountHtml(st)}</div></div>
+    </div>
+    ${!row.isMine && ideas.length ? `<div><div class="lbl" style="margin-bottom:6px">Trade ideas with this team</div><ul class="mlist">${ideas.map(t => `<li><span class="tagw">${t.winWin ? "Helps both" : "Fair"}</span>
+        <span class="what">Send ${t.give.map(nm).join(" + ")} &rarr; get ${t.get.map(nm).join(" + ")}</span><span class="dchip up">+${(t.dMe * 100).toFixed(1)}</span></li>`).join("")}</ul></div>` : ""}
+    <p class="muted" style="margin:0">Mantis = draft value score. ${pts ? "FP/G = projected fantasy points per game in your league's scoring" : "Value/G = per-game value summed over your league's categories (0 = average draftable player)"}${played ? ", blended with this season's games" : ""}. Click a player for details.</p>`;
+  $("dlg").classList.add("wide");
+  if (!$("dlg").open) $("dlg").showModal();
+}
+$("dlg").addEventListener("close", () => $("dlg").classList.remove("wide"));
+$("dlg").addEventListener("click", e => {
+  const r = e.target.closest("tr[data-player]");
+  if (r && $("dlg").classList.contains("wide")) { $("dlg").close(); openPlayer(+r.dataset.player); }
+});
+
 $("seasonView").addEventListener("change", e => {
   if (e.target.id === "wiPartner") { wiPartner = +e.target.value; renderSeason(); }
 });
 $("seasonView").addEventListener("click", e => {
+  const t = e.target.closest("[data-steam]");
+  if (t) { openSeasonTeam(+t.dataset.steam); return; }
   const b = e.target.closest("button"); if (!b) return;
   if (b.dataset.sv === "moves") return loadMoves(false, true);
   if (b.dataset.wisug != null) {
@@ -1585,6 +1687,8 @@ $("seasonView").addEventListener("click", e => {
   const b = e.target.closest("button"); if (!b) return;
   if (b.dataset.sv === "rerun") return loadSeason(true);
   if (b.dataset.sv === "connect") return openConnect();
+  if (b.dataset.sv === "board") { S.view = "board"; save(); return renderView(); }
+  if (b.dataset.sv === "mock") { S.view = "board"; save(); renderView(); return openMockSetup(); }
   if (b.dataset.trade != null) {
     const t = SEASON.suggestions.trades[+b.dataset.trade];
     const nm = id => SEASON.names[String(id)] ?? `Player ${id}`;
@@ -1651,10 +1755,10 @@ async function poll() {
   if (!LIVE || document.hidden) return;
   try {
     const snap = await api("/api/league");
-    L = snap; liveErr = "";
+    L = snap; liveErr = ""; syncLeague();
   } catch (e) {
     liveErr = e.message;
-    if (/No league connected/.test(e.message)) { L = null; liveErr = ""; render(); return; }
+    if (/No league connected/.test(e.message)) { L = null; liveErr = ""; syncLeague(); render(); return; }
   }
   render();
   const d = L?.draft;
@@ -1709,7 +1813,11 @@ $("dlg").onclick = e => {
   const mp = e.target.closest("[data-mockpick]");
   if (mp) { $("dlg").close(); return mockUserPick(+mp.dataset.mockpick); }
   const b = e.target.closest("[data-myteam]");
-  if (b) { S.myTeam = +b.dataset.myteam; $("dlg").close(); render(); }
+  if (b) {
+    $("dlg").close();
+    api("/api/myteam", { method: "POST", body: JSON.stringify({ teamId: +b.dataset.myteam }) })
+      .then(snap => { L = snap; syncLeague(); render(); }).catch(er => toast(er.message));
+  }
 };
 
 const m = D.meta;

@@ -24,7 +24,7 @@ MAX_FEED_BODY = 400_000
 class State:
     lock = threading.Lock()
     season_lock = threading.Lock()
-    moves_cache: tuple[float, dict] | None = None
+    moves_cache: tuple[tuple, float, dict] | None = None
     cache: tuple[tuple, float, dict] | None = None
     rebuild = {"running": False, "error": None, "finished": None}
 
@@ -68,21 +68,31 @@ def _roster_sig() -> str | None:
 
 
 def _season(force: bool = False, sims: int = season.DEFAULT_SIMS) -> dict:
-    """Season report, cached in data/season.json until the player data, the league or 30 minutes change."""
-    path = site.ROOT / "data" / "season.json"
-    sel = espn_league.load_store().get("league")
+    """Season report for the connected league, cached in its folder until the player data, the league,
+    your team, any roster or 30 minutes change."""
+    store = espn_league.load_store()
+    sel = store.get("league")
+    if not sel:
+        raise espn_league.EspnError("No league connected yet.", 409)
+    path = espn_league.league_dir(site.ROOT, sel) / "season.json"
     with State.season_lock:
         if not force and path.exists():
             rep = json.loads(path.read_text())
             fresh = time.time() - path.stat().st_mtime < 30 * 60
-            same = rep.get("dataGenerated") == _data_generated() and rep.get("leagueId") == (sel or {}).get("id")
+            same = (rep.get("dataGenerated") == _data_generated() and rep.get("leagueKey") == espn_league.league_key(sel)
+                    and rep.get("myTeamId") == _league_snapshot().get("myTeamId"))
             if fresh and same and rep.get("rosterSig") == _roster_sig():
                 return rep
         rep = season.run(site.ROOT, sims=sims)
-        rep["leagueId"] = (sel or {}).get("id")
         rep["rosterSig"] = _roster_sig()
         path.write_text(json.dumps(rep))
         return rep
+
+
+def _reset_league_caches() -> None:
+    """Forget everything computed for the previous league or team."""
+    State.cache = None
+    State.moves_cache = None
 
 
 def _league_snapshot(force: bool = False) -> dict:
@@ -90,14 +100,14 @@ def _league_snapshot(force: bool = False) -> dict:
     sel = s.get("league")
     if not sel:
         raise espn_league.EspnError("No league connected yet.", 409)
-    key = (sel["id"], sel["season"], s.get("swid"), s.get("espn_s2"))
+    key = (sel["id"], sel["season"], s.get("swid"), s.get("espn_s2"), espn_league.my_team(s))
     feed = draftfeed.HUB.get(sel["id"])
     ttl = LEAGUE_TTL_FEED if feed and feed.active else LEAGUE_TTL
     with State.lock:
         cached = State.cache if State.cache and State.cache[0] == key else None
     if force or not cached or time.time() - cached[1] >= ttl:
         raw = espn_league.fetch_league(sel["id"], sel["season"], s)
-        cached = (key, time.time(), espn_league.normalize(raw, s.get("swid")))
+        cached = (key, time.time(), espn_league.normalize(raw, s.get("swid"), espn_league.my_team(s)))
         with State.lock:
             State.cache = cached
     return draftfeed.merge(copy.deepcopy(cached[2]), feed)
@@ -212,18 +222,36 @@ class Handler(BaseHTTPRequestHandler):
         raw = espn_league.fetch_league(league_id, season, s)  # validates access before saving
         s["league"] = {"id": league_id, "season": season}
         espn_league.save_store(s)
-        snap = espn_league.normalize(raw, s.get("swid"))
-        State.cache = ((league_id, season, s.get("swid"), s.get("espn_s2")), time.time(), snap)
-        self._json(200, snap)
+        _reset_league_caches()
+        self._json(200, _league_snapshot())
 
     def disconnect(self):
         s = espn_league.load_store()
         s.pop("league", None)
         espn_league.save_store(s)
-        State.cache = None
+        _reset_league_caches()
         self._json(200, _status())
 
     def league(self):
+        self._json(200, _league_snapshot())
+
+    def set_my_team(self):
+        """Remember which team is yours in the connected league (when your login cookie can't tell)."""
+        b = self._body()
+        s = espn_league.load_store()
+        sel = s.get("league")
+        if not sel:
+            raise espn_league.EspnError("No league connected yet.", 409)
+        teams = s.setdefault("myTeams", {})
+        if b.get("teamId") in (None, ""):
+            teams.pop(espn_league.league_key(sel), None)
+        else:
+            try:
+                teams[espn_league.league_key(sel)] = int(b["teamId"])
+            except (TypeError, ValueError):
+                raise espn_league.EspnError("teamId must be a number.", 400) from None
+        espn_league.save_store(s)
+        _reset_league_caches()
         self._json(200, _league_snapshot())
 
     def draftfeed(self):
@@ -266,11 +294,16 @@ class Handler(BaseHTTPRequestHandler):
 
     def moves_get(self):
         fresh = "fresh=1" in (urlparse(self.path).query or "")
-        if not fresh and State.moves_cache and time.time() - State.moves_cache[0] < 45:
-            return self._json(200, State.moves_cache[1])
+        store = espn_league.load_store()
+        sel = store.get("league")
+        if not sel:
+            raise espn_league.EspnError("No league connected yet.", 409)
+        key = (espn_league.league_key(sel), espn_league.my_team(store))
+        if not fresh and State.moves_cache and State.moves_cache[0] == key and time.time() - State.moves_cache[1] < 45:
+            return self._json(200, State.moves_cache[2])
         rep = moves.build(site.ROOT)
-        State.moves_cache = (time.time(), rep)
-        (site.ROOT / "data" / "moves.json").write_text(json.dumps(rep))  # feeds the hosted snapshot
+        State.moves_cache = (key, time.time(), rep)
+        (espn_league.league_dir(site.ROOT, sel) / "moves.json").write_text(json.dumps(rep))  # feeds the hosted snapshot
         self._json(200, rep)
 
     def whatif(self):
@@ -305,6 +338,7 @@ ROUTES = {
     ("POST", "/api/league"): Handler.connect,
     ("DELETE", "/api/league"): Handler.disconnect,
     ("GET", "/api/league"): Handler.league,
+    ("POST", "/api/myteam"): Handler.set_my_team,
     ("POST", "/api/rebuild"): Handler.rebuild,
     ("POST", "/api/draftfeed"): Handler.draftfeed,
     ("GET", "/api/events"): Handler.events,

@@ -5,7 +5,7 @@ ESPN views (read-only, verified on a live league):
   mTransactions2        recent transactions: type DRAFT/WAIVER/FREEAGENT/ROSTER/TRADE_*, status PENDING/EXECUTED/...
                         items: [{type ADD/DROP/TRADE, playerId, fromTeamId, toTeamId}]  (team 0 = free agency)
   mPendingTransactions  the pending ones, with processDate
-mTransactions2 only covers a recent window, so every transaction seen is kept in data/transactions.json.
+mTransactions2 only covers a recent window, so every transaction seen is kept in data/leagues/<id>-<season>/transactions.json.
 """
 
 from __future__ import annotations
@@ -54,9 +54,9 @@ def normalize(tx: dict) -> dict | None:
     }
 
 
-def sync(root: Path, raw_tx: list[dict]) -> list[dict]:
-    """Merge newly seen transactions into data/transactions.json and return all known moves, newest first."""
-    path = root / "data" / "transactions.json"
+def sync(ldir: Path, raw_tx: list[dict]) -> list[dict]:
+    """Merge newly seen transactions into the league's transactions.json and return all known moves, newest first."""
+    path = ldir / "transactions.json"
     known = json.loads(path.read_text()) if path.exists() else {}
     for tx in raw_tx:
         n = normalize(tx)
@@ -79,12 +79,12 @@ def plan_key(s: dict) -> str:
     return f"trade:{s['partner']}:{'-'.join(map(str, sorted(s['give'])))}:{'-'.join(map(str, sorted(s['get'])))}"
 
 
-def record_plan(root: Path, rep: dict) -> None:
+def record_plan(ldir: Path, rep: dict) -> None:
     """Remember every suggestion the user was shown, so later moves can be matched to it."""
     sug = rep.get("suggestions")
     if not sug:
         return
-    path = root / "data" / "plan.json"
+    path = ldir / "plan.json"
     plan = json.loads(path.read_text()) if path.exists() else {}
     now = rep["generated"]
     new = [{"kind": "waiver", "add": w["add"], "drop": w["drop"], "dMe": w["dMe"]} for w in sug["waivers"][:5]]
@@ -167,12 +167,16 @@ class Context:
         from . import draftfeed
         self.root, self.store, self.sel = root, store, sel
         self.raw = season.fetch_raw(sel["id"], sel["season"], store)
-        self.snap = draftfeed.merge(espn_league.normalize(self.raw, store.get("swid")), draftfeed.HUB.get(sel["id"]))
+        self.snap = draftfeed.merge(espn_league.normalize(self.raw, store.get("swid"), espn_league.my_team(store)),
+                                    draftfeed.HUB.get(sel["id"]))
+        espn_league.require_rosters(self.snap)
+        self.ldir = espn_league.league_dir(root, sel)
+        self.key = espn_league.league_key(sel)
         self.payload = json.loads((root / "data" / "players.json").read_text())
         self.pro = sources.espn_pro_schedule(root / "data" / "raw")
         self.me = self.snap.get("myTeamId")
         self.rosters = {t["id"]: list(t["roster"]) for t in self.snap["teams"]}
-        self.moves = sync(root, fetch_transactions(sel["id"], sel["season"], store))
+        self.moves = sync(self.ldir, fetch_transactions(sel["id"], sel["season"], store))
         self.names = {p["id"]: p["name"] for p in self.payload["players"]} | {int(k): v for k, v in self.snap.get("names", {}).items()}
         ctx = season.league_context(self.raw)
         self.model = season.Model(self.payload["players"], self.payload["meta"], self.snap["league"], self.snap, ctx, self.pro)
@@ -204,7 +208,7 @@ def build(root: Path, whatif: list[dict] | None = None) -> dict:
     c = Context(root)
     me, now = c.me, c.rosters
     if me is None:
-        raise espn_league.EspnError("Pick your team on the board (League panel) first.", 409)
+        raise espn_league.EspnError("Which team is yours? Pick it in the League panel on the Draft board tab.", 409)
     mine_exec = [m for m in c.moves if m["status"] == "EXECUTED" and any(me in (it["from"], it["to"]) for it in m["items"])]
     pending = [m for m in c.moves if m["status"] == "PENDING"]
 
@@ -213,7 +217,7 @@ def build(root: Path, whatif: list[dict] | None = None) -> dict:
         draft_day = apply(draft_day, reverse(m))
     with_pending = apply(now, [x for m in reversed(pending) for x in move_transfers(m)])
 
-    plan_path = root / "data" / "plan.json"
+    plan_path = c.ldir / "plan.json"
     plan = list(json.loads(plan_path.read_text()).values()) if plan_path.exists() else []
     tracked = []
     for s in sorted(plan, key=lambda s: (s["kind"] != "waiver", -s["dMe"])):
@@ -261,12 +265,13 @@ def build(root: Path, whatif: list[dict] | None = None) -> dict:
         m["suggested"] = [s["key"] for s in tracked if s["state"] != "open" and s["firstSeen"] <= made
                           and any(t[0] == it["playerId"] and t[2] == it["to"] for t in transfers_of(s, me) for it in m["items"])]
 
-    hist_path = root / "data" / "history.jsonl"
+    hist_path = c.ldir / "history.jsonl"
     history = [json.loads(x) for x in hist_path.read_text().splitlines() if x.strip()] if hist_path.exists() else []
     avail = sorted((p for p in c.payload["players"] if str(p["id"]) not in c.snap["owners"] and p["team"] != "FA"),
                    key=lambda p: -c.model.value[p["id"]])[:80]
     return {
         "generated": dt.datetime.now().strftime("%Y-%m-%d %H:%M"),
+        "leagueKey": c.key, "leagueName": c.snap["league"]["name"],
         "myTeamId": me, "rosterSize": c.snap["league"]["rosterSize"],
         "scenarios": scenarios, "custom": custom,
         "moves": [m for m in c.moves if m.get("mine") or m["type"].startswith("TRADE")][:40],
@@ -286,12 +291,12 @@ def transfers_ids(s: dict) -> list[int]:
     return list(s["give"]) + list(s["get"])
 
 
-def append_history(root: Path, rep: dict) -> None:
+def append_history(ldir: Path, rep: dict) -> None:
     """One line per season report: how your odds move over the season."""
     mine = next((t for t in rep["teams"] if t["isMine"]), None)
     if not mine:
         return
-    path = root / "data" / "history.jsonl"
+    path = ldir / "history.jsonl"
     line = {"at": rep["generated"], "strength": mine["strength"], "playoffPct": mine["playoffPct"],
             "titlePct": mine["titlePct"], "projW": mine["proj"]["w"], "projL": mine["proj"]["l"]}
     with path.open("a") as fh:

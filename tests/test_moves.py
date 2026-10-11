@@ -74,6 +74,7 @@ class ScenarioTests(unittest.TestCase):
         self.raw = raw
         self.txs = [tx("r1", "ROSTER", "EXECUTED", [("DROP", self.worst, ME, 0)], "2026-10-10 10:47"),
                     tx("w1", "WAIVER", "PENDING", [("ADD", self.best_fa, 0, ME)], "2026-10-10 10:48", process=1791702000000)]
+        # written where pre-league-folder versions kept it: the first build must move it into data/leagues/555-2027/
         (self.root / "data" / "plan.json").write_text(json.dumps({"waiver:x": {
             "kind": "waiver", "add": self.best_fa, "drop": self.worst, "dMe": 0.1, "dMeFirst": 0.1, "key": "waiver:x",
             "firstSeen": "2026-10-10 10:33", "lastSeen": "2026-10-10 10:33"}}))
@@ -107,11 +108,66 @@ class ScenarioTests(unittest.TestCase):
               f"pending {sc['pending']['me']['playoffPct']}% · plan {sc['plan']['me']['playoffPct']}% · what-if {w['custom']['me']['playoffPct']}%")
 
     def test_suggestion_shown_after_move_is_not_credited(self):
-        plan = json.loads((self.root / "data" / "plan.json").read_text())
+        ldir = espn_league.league_dir(self.root, {"id": 555, "season": 2027})
+        plan = json.loads((ldir / "plan.json").read_text())
         plan["waiver:x"]["firstSeen"] = "2026-10-10 11:30"   # shown after the claim was made
-        (self.root / "data" / "plan.json").write_text(json.dumps(plan))
+        (ldir / "plan.json").write_text(json.dumps(plan))
         r = moves.build(self.root)
         self.assertFalse(next(m for m in r["moves"] if m["id"] == "w1")["suggested"])
+
+
+class LeagueSwitchTests(ScenarioTests):
+    """Two leagues on one install: each keeps its own moves, suggestions and history."""
+
+    test_scenarios_and_tracking = None                      # inherited setUp only, not these
+    test_suggestion_shown_after_move_is_not_credited = None
+
+    def test_switch_keeps_leagues_apart(self):
+        a = moves.build(self.root)
+        dir_a = self.root / "data" / "leagues" / "555-2027"
+        self.assertTrue((dir_a / "plan.json").exists())          # legacy file moved into league A's folder
+        self.assertFalse((self.root / "data" / "plan.json").exists())
+        self.assertEqual(a["leagueKey"], "555-2027")
+        # switch to league 888: same fake rosters, no transactions, no plan
+        raw_b = json.loads(json.dumps(self.raw))
+        raw_b["id"] = 888
+        espn_league.save_store({"league": {"id": 888, "season": 2027}, "swid": "{ME}", "espn_s2": "x" * 100})
+        with mock.patch.object(season, "fetch_raw", return_value=raw_b), mock.patch.object(moves, "fetch_transactions", return_value=[]):
+            b = moves.build(self.root)
+        self.assertEqual(b["leagueKey"], "888-2027")
+        self.assertEqual(b["moves"], [])
+        self.assertEqual(b["tracked"], [])                         # league A's suggestions do not leak
+        self.assertTrue((self.root / "data" / "leagues" / "888-2027" / "transactions.json").exists())
+        self.assertEqual(len(json.loads((dir_a / "transactions.json").read_text())), 2)  # A untouched
+
+    def test_undrafted_league_has_no_outlook(self):
+        raw = TS.fake_raw(stacked_team=0)
+        raw["id"] = 999
+        raw["draftDetail"] = {"drafted": False, "inProgress": False, "picks": []}
+        for t in raw["teams"]:
+            t["roster"]["entries"] = []
+        snap = espn_league.normalize(raw, "{ME}")
+        self.assertFalse(espn_league.rosters_ready(snap))
+        espn_league.save_store({"league": {"id": 999, "season": 2027}, "swid": "{ME}", "espn_s2": "x" * 100})
+        with mock.patch.object(season, "fetch_raw", return_value=raw), mock.patch.object(moves, "fetch_transactions", return_value=[]):
+            with self.assertRaises(espn_league.EspnError) as cm:
+                moves.build(self.root)
+            self.assertIn("has not drafted yet", str(cm.exception))
+            with self.assertRaises(espn_league.EspnError):
+                season.run(self.root)
+        self.assertFalse((self.root / "data" / "leagues" / "999-2027" / "history.jsonl").exists())  # nothing recorded
+
+    def test_my_team_override(self):
+        raw = TS.fake_raw(stacked_team=0)
+        self.assertEqual(espn_league.normalize(raw, "{ME}")["myTeamId"], ME)
+        snap = espn_league.normalize(raw, None, my_team_id=3)
+        self.assertEqual(snap["myTeamId"], 3)
+        self.assertEqual([t["id"] for t in snap["teams"] if t["isMine"]], [3])
+        self.assertEqual(espn_league.normalize(raw, "{ME}", my_team_id=99)["myTeamId"], ME)  # unknown team ignored
+        store = {"league": {"id": 555, "season": 2027}, "myTeams": {"555-2027": 3, "888-2027": 5}}
+        self.assertEqual(espn_league.my_team(store), 3)
+        store["league"]["id"] = 888
+        self.assertEqual(espn_league.my_team(store), 5)
 
 
 if __name__ == "__main__":

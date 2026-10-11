@@ -115,7 +115,7 @@ python3 -m mantis season --sims 2000   # terminal report
 python3 -m mantis serve                # board → Season tab
 ```
 
-Needs a connected ESPN league. For each team: current record, projected W-L-T, **strength** (chance to beat an average opponent in a typical week), **playoff %** and **title %**, and its league rank in every category. For your team: category win rates, a game plan, trade ideas, waiver add/drops and this week's streamers.
+Needs a connected ESPN league. Click any team in the standings (or the partner on a trade idea) for its team card: record, projection, playoff/title odds, category ranks, full roster with value and injury/form flags, starting lineup with position counts, and Mantis trade ideas with that team. For each team: current record, projected W-L-T, **strength** (chance to beat an average opponent in a typical week), **playoff %** and **title %**, and its league rank in every category. For your team: category win rates, a game plan, trade ideas, waiver add/drops and this week's streamers.
 
 **How it works**
 
@@ -138,6 +138,10 @@ The top of the Season tab follows what you actually do in ESPN:
 - **Odds history**: a line of your playoff odds, one point per season report (daily refresh + manual runs), in `data/history.jsonl`.
 
 The tab checks ESPN every minute while open. When a claim or trade goes through, it says so and re-runs the season with the new rosters. Suggestions are generated on the roster you'll have once your pending moves clear, so the same move is never suggested twice.
+
+### Switching leagues
+
+Everything tied to a league lives in its own folder, `data/leagues/<leagueId>-<season>/` (season report, moves snapshot, transaction log, suggestion log, odds history), so leagues never mix. Connecting another league (board dialog or `python3 -m mantis league --id …`) resets the server's caches. The open board notices within one refresh ("Now following …"), drops the old league's outlook, moves and what-ifs, and rebuilds for the new one; a slow response for the old league is discarded. "This is my team" is saved per league on the server, so the season model knows your team even when your login cookie can't identify it. A league that has not drafted yet shows a pre-draft notice instead of a simulation (nothing is recorded for it), with links to the Draft board and a mock draft.
 
 ## Daily data refresh
 

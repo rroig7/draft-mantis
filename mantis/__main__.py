@@ -99,7 +99,8 @@ def write_dist(payload: dict | None = None) -> None:
 def save_moves() -> None:
     from . import moves
     rep = moves.build(ROOT)
-    (DATA / "moves.json").write_text(json.dumps(rep))
+    sel = espn_league.load_store()["league"]
+    (espn_league.league_dir(ROOT, sel) / "moves.json").write_text(json.dumps(rep))
 
 
 def top(args) -> None:
@@ -144,7 +145,8 @@ def league(args) -> None:
     if not store.get("league"):
         raise SystemExit("No league connected. Run: python3 -m mantis league --id <leagueId>")
     sel = store["league"]
-    snap = espn_league.normalize(espn_league.fetch_league(sel["id"], sel["season"], store), store.get("swid"))
+    snap = espn_league.normalize(espn_league.fetch_league(sel["id"], sel["season"], store), store.get("swid"),
+                                 espn_league.my_team(store))
     if args.id:
         espn_league.save_store(store)
     lg, dr = snap["league"], snap["draft"]
@@ -177,9 +179,8 @@ def addon() -> None:
 def season_cmd(sims: int) -> None:
     from . import season
     rep = season.run(ROOT, sims=sims)
-    rep["leagueId"] = (espn_league.load_store().get("league") or {}).get("id")
-    (DATA / "season.json").write_text(json.dumps(rep))
-    save_moves()
+    if rep.get("myTeamId") is not None:
+        save_moves()
     write_dist()
     name = lambda i: rep["names"].get(str(i), str(i))  # noqa: E731
     print(f"{rep['sims']} simulated seasons · week {rep['currentPeriod']} · {rep['remainingPeriods']} matchup weeks left"
@@ -216,11 +217,12 @@ def daily() -> None:
             from . import season
             sources.espn_pro_schedule(RAW, refresh=True)
             rep = season.run(ROOT)
-            rep["leagueId"] = espn_league.load_store()["league"]["id"]
-            (DATA / "season.json").write_text(json.dumps(rep))
-            print(f"Season report updated: {len(rep['teams'])} teams, {rep['sims']} sims")
-            save_moves()
+            print(f"Season report updated for {rep['leagueName']}: {len(rep['teams'])} teams, {rep['sims']} sims")
+            if rep.get("myTeamId") is not None:
+                save_moves()
             write_dist()
+        except espn_league.EspnError as e:  # e.g. the league has not drafted yet
+            print(f"Season report skipped: {e}")
         except Exception:  # the data refresh above still counts
             traceback.print_exc()
 

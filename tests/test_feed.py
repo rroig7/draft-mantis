@@ -4,6 +4,7 @@ Run: python3 -m unittest discover tests
 """
 
 import json
+from pathlib import Path
 import os
 import socket
 import tempfile
@@ -52,6 +53,82 @@ class FeedParseTests(unittest.TestCase):
     def test_merge_without_feed(self):
         snap = espn_league.normalize(fake_league(), SWID)
         self.assertFalse(draftfeed.merge(snap, None)["feed"]["active"])
+
+
+class LeagueSwitchServerTests(unittest.TestCase):
+    """Switching the connected league (or your team) must not serve the previous league's season or moves."""
+
+    @classmethod
+    def setUpClass(cls):
+        from mantis import moves, season as season_mod
+        raws = {777: fake_league(), 888: {**fake_league(), "id": 888, "settings": {**fake_league()["settings"], "name": "Other League"}}}
+        cls.calls = []
+
+        def fake_run(root, sims=1500, **k):
+            sel = espn_league.load_store()["league"]
+            cls.calls.append(("season", sel["id"]))
+            snap = server._league_snapshot()
+            return {"leagueKey": espn_league.league_key(sel), "leagueId": sel["id"], "myTeamId": snap["myTeamId"],
+                    "dataGenerated": server._data_generated(), "teams": [], "generated": "x"}
+
+        def fake_moves(root, whatif=None):
+            sel = espn_league.load_store()["league"]
+            cls.calls.append(("moves", sel["id"]))
+            return {"leagueKey": espn_league.league_key(sel), "myTeamId": server._league_snapshot()["myTeamId"]}
+
+        import shutil
+        from mantis import site
+        cls.tmp = Path(tempfile.mkdtemp())          # never write fake leagues into the real data/ folder
+        (cls.tmp / "data").mkdir()
+        shutil.copy(site.ROOT / "data" / "players.json", cls.tmp / "data")
+        cls.patches = [mock.patch.object(site, "ROOT", cls.tmp),
+                       mock.patch.object(espn_league, "fetch_league", side_effect=lambda i, s, c=None: raws[i]),
+                       mock.patch.object(season_mod, "run", side_effect=fake_run),
+                       mock.patch.object(moves, "build", side_effect=fake_moves)]
+        for p in cls.patches:
+            p.start()
+        espn_league.save_store({"swid": SWID, "espn_s2": "x" * 100})
+        server.State.cache = None
+        server.State.moves_cache = None
+        cls.httpd = server.ThreadingHTTPServer(("127.0.0.1", 0), server.Handler)
+        cls.httpd.daemon_threads = True
+        cls.port = cls.httpd.server_address[1]
+        threading.Thread(target=cls.httpd.serve_forever, daemon=True).start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.httpd.shutdown()
+        for p in cls.patches:
+            p.stop()
+
+    def req(self, method, path, body=None):
+        r = urllib.request.Request(f"http://127.0.0.1:{self.port}{path}", method=method,
+                                   data=json.dumps(body).encode() if body is not None else None,
+                                   headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(r) as resp:
+            return json.loads(resp.read())
+
+    def test_switch_league_and_team(self):
+        self.req("POST", "/api/league", {"id": 777, "season": 2027})
+        self.assertEqual(self.req("GET", "/api/season")["leagueKey"], "777-2027")
+        self.assertEqual(self.req("GET", "/api/moves")["leagueKey"], "777-2027")
+        self.assertEqual(self.req("GET", "/api/season")["leagueKey"], "777-2027")  # cached: no second run
+        self.assertEqual(self.calls.count(("season", 777)), 1)
+
+        snap = self.req("POST", "/api/league", {"id": 888, "season": 2027})          # switch leagues
+        self.assertEqual(snap["leagueKey"], "888-2027")
+        self.assertEqual(snap["league"]["name"], "Other League")
+        self.assertEqual(self.req("GET", "/api/season")["leagueKey"], "888-2027")
+        self.assertEqual(self.req("GET", "/api/moves")["leagueKey"], "888-2027")      # moves cache did not leak
+
+        snap = self.req("POST", "/api/myteam", {"teamId": 2})                        # pick a different team
+        self.assertEqual(snap["myTeamId"], 2)
+        self.assertEqual(self.req("GET", "/api/season")["myTeamId"], 2)               # season rebuilt for that team
+        self.assertEqual(self.req("GET", "/api/moves")["myTeamId"], 2)
+
+        self.req("POST", "/api/league", {"id": 777, "season": 2027})                  # back to the first league
+        self.assertEqual(self.req("GET", "/api/league")["myTeamId"], 4)               # its own team, not 888's pick
+        self.assertEqual(self.req("GET", "/api/season")["leagueKey"], "777-2027")
 
 
 class FeedServerTests(unittest.TestCase):

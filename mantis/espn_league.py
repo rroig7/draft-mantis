@@ -70,6 +70,62 @@ def save_store(data: dict) -> None:
     tmp.replace(STORE)
 
 
+def league_key(sel: dict) -> str:
+    return f"{int(sel['id'])}-{int(sel['season'])}"
+
+
+LEAGUE_FILES = ("season.json", "moves.json", "transactions.json", "plan.json", "history.jsonl")
+
+
+def league_dir(root: Path, sel: dict) -> Path:
+    """Per-league folder for everything tied to one league: data/leagues/<id>-<season>/."""
+    _migrate_legacy(root, sel)
+    d = root / "data" / "leagues" / league_key(sel)
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _migrate_legacy(root: Path, sel: dict) -> None:
+    """One-time move of files written before leagues had their own folders. They go to the league named in the
+    old season.json (whichever league that is), or, without one, to the league being opened now."""
+    legacy = root / "data"
+    if not any((legacy / n).exists() for n in LEAGUE_FILES):
+        return
+    owner = {"id": sel["id"], "season": sel["season"]}
+    if (legacy / "season.json").exists():
+        try:
+            rep = json.loads((legacy / "season.json").read_text())
+            if rep.get("leagueId"):
+                owner = {"id": rep["leagueId"], "season": rep.get("leagueSeason") or sel["season"]}
+        except json.JSONDecodeError:
+            pass
+    d = root / "data" / "leagues" / league_key(owner)
+    d.mkdir(parents=True, exist_ok=True)
+    for name in LEAGUE_FILES:
+        if (legacy / name).exists() and not (d / name).exists():
+            (legacy / name).rename(d / name)
+
+
+def my_team(store: dict) -> int | None:
+    """The team the user picked on the board for the connected league (when the login cookie can't tell)."""
+    sel = store.get("league")
+    return (store.get("myTeams") or {}).get(league_key(sel)) if sel else None
+
+
+def rosters_ready(snap: dict) -> bool:
+    """True once the league has real rosters: the draft is done, or teams already hold most of a roster."""
+    teams = snap.get("teams") or []
+    held = sum(len(t["roster"]) for t in teams)
+    return bool(teams) and (snap["draft"]["drafted"] or held >= len(teams) * min(8, snap["league"]["rosterSize"]))
+
+
+def require_rosters(snap: dict) -> None:
+    if not rosters_ready(snap):
+        d = snap["draft"]
+        when = "is drafting right now" if d["inProgress"] else "has not drafted yet"
+        raise EspnError(f"{snap['league']['name']} {when}. The season outlook starts once rosters are set.", 409)
+
+
 def normalize_swid(swid: str) -> str:
     s = swid.strip().strip("{}").upper()
     return "{" + s + "}" if s else ""
@@ -171,7 +227,7 @@ def _team_name(t: dict) -> str:
     return t.get("name") or " ".join(x for x in (t.get("location"), t.get("nickname")) if x) or f"Team {t['id']}"
 
 
-def normalize(raw: dict, swid: str | None = None) -> dict:
+def normalize(raw: dict, swid: str | None = None, my_team_id: int | None = None) -> dict:
     """Reduce ESPN's league payload to what the draft board needs."""
     st = raw.get("settings") or {}
     sc = st.get("scoringSettings") or {}
@@ -242,7 +298,12 @@ def normalize(raw: dict, swid: str | None = None) -> dict:
     picks.sort(key=lambda p: p["pick"] or 0)
 
     my = next((t["id"] for t in teams if t["isMine"]), None)
+    if my_team_id is not None and any(t["id"] == my_team_id for t in teams):
+        my = my_team_id
+        for t in teams:
+            t["isMine"] = t["id"] == my
     return {
+        "leagueKey": f"{raw.get('id')}-{raw.get('seasonId')}",
         "league": {
             "id": raw.get("id"), "season": raw.get("seasonId"), "name": st.get("name") or f"League {raw.get('id')}",
             "size": st.get("size") or len(teams), "scoringType": scoring_type,
